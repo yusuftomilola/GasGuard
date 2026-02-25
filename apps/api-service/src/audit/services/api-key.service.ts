@@ -1,6 +1,6 @@
-import { Injectable, UnauthorizedException, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, NotFoundException, ForbiddenException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomBytes, createHash } from 'crypto';
+import * as crypto from 'crypto';
 import { ApiKeyRepository } from './api-key.repository';
 import { AuditLogService } from './audit-log.service';
 import { ApiKey, ApiKeyStatus } from '../entities/api-key.entity';
@@ -11,28 +11,32 @@ import {
   ApiKeyStatusDto,
   ApiKeyListResponseDto,
   ApiKeyRotationResponseDto,
-  ApiKeyExpiredError,
 } from '../dto/api-key.dto';
 
-export class ApiKeyExpiredException extends UnauthorizedException {
+export class ApiKeyExpiredException extends HttpException {
   constructor(expiredAt: Date, keyId: string) {
-    const errorResponse: ApiKeyExpiredError = {
-      error: 'APIKeyExpired',
-      message: 'This API key has expired. Please rotate or request a new key.',
-      expiredAt: expiredAt.toISOString(),
-      keyId,
-    };
-    super(errorResponse);
+    super(
+      {
+        error: 'APIKeyExpired',
+        message: 'This API key has expired. Please rotate or request a new key.',
+        expiredAt: expiredAt.toISOString(),
+        keyId,
+      },
+      HttpStatus.UNAUTHORIZED,
+    );
   }
 }
 
-export class ApiKeyRevokedException extends UnauthorizedException {
+export class ApiKeyRevokedException extends HttpException {
   constructor(keyId: string) {
-    super({
-      error: 'APIKeyRevoked',
-      message: 'This API key has been revoked.',
-      keyId,
-    });
+    super(
+      {
+        error: 'APIKeyRevoked',
+        message: 'This API key has been revoked.',
+        keyId,
+      },
+      HttpStatus.UNAUTHORIZED,
+    );
   }
 }
 
