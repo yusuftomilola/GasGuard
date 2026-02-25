@@ -37,6 +37,7 @@ import databaseConfig from './config/database.config';
     ChainReliabilityModule,
     PerformanceMonitoringModule,
     GasSubsidyModule,
+    AuditModule,
   ],
   providers: [
     // Apply RolesGuard globally to enforce RBAC on all routes

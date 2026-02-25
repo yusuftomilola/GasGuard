@@ -171,7 +171,42 @@ For detailed information, see:
 - [E2E Testing Documentation](./docs/E2E_TESTING.md)
 - [E2E Quick Start Guide](./docs/E2E_QUICKSTART.md)
 
-## 🚀 Getting Started
+## � Audit Logging System
+
+GasGuard includes a comprehensive audit logging system for enterprise compliance and accountability. The system tracks all critical actions including:
+
+- **API Requests**: Every endpoint access with status, latency, and requestor information
+- **Key Management**: API key creation, rotation, and revocation events
+- **Gas Transactions**: All gas transaction submissions and processing with chain context
+- **Immutable Storage**: Append-only logs with SHA256 integrity verification
+- **Enterprise Reporting**: CSV/JSON export, advanced filtering, and compliance reports
+
+### Key Features
+- ✅ Automatic HTTP request capture via interceptor
+- ✅ Multi-chain support (Ethereum, Solana, Stellar, etc.)
+- ✅ PostgreSQL storage with optimized indexing
+- ✅ RESTful API for querying and exporting logs
+- ✅ 70%+ test coverage with unit and E2E tests
+- ✅ Configurable retention policies
+
+### Access the Audit API
+
+```bash
+# Query logs with filtering
+curl "http://localhost:3000/audit/logs?eventType=APIRequest&from=2024-02-01&to=2024-02-28"
+
+# Export logs for compliance
+curl -X POST "http://localhost:3000/audit/logs/export" \
+  -H "Content-Type: application/json" \
+  -d '{"format": "csv"}' > audit-logs.csv
+```
+
+For comprehensive documentation, see:
+- [Audit Logging System Documentation](./docs/AUDIT_LOGGING_SYSTEM.md)
+- [Audit Integration Guide](./docs/AUDIT_INTEGRATION_GUIDE.md)
+- [Audit Module README](./apps/api-service/src/audit/README.md)
+
+## �🚀 Getting Started
 
 ### Prerequisites
 

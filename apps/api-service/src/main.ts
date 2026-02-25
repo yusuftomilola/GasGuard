@@ -1,6 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { AuditInterceptor } from './audit/interceptors';
+import { AuditLogService } from './audit/services';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -12,6 +14,10 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Add global audit interceptor
+  const auditLogService = app.get(AuditLogService);
+  app.useGlobalInterceptors(new AuditInterceptor(auditLogService));
 
   app.enableCors();
 
