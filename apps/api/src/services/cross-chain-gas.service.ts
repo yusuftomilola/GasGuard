@@ -90,7 +90,7 @@ export class CrossChainGasService {
       10: { baseFee: '15000000000', priorityFee: '1000000000' }
     };
 
-    const gasPrice = mockGasPrices[chain.chainId] || { baseFee: '20000000000', priorityFee: '2000000000' };
+    const gasPrice = (mockGasPrices as Record<number, { baseFee: string; priorityFee: string }>)[chain.chainId] || { baseFee: '20000000000', priorityFee: '2000000000' };
 
     return {
       chainId: chain.chainId,
@@ -98,7 +98,7 @@ export class CrossChainGasService {
       baseFee: gasPrice.baseFee,
       priorityFee: gasPrice.priorityFee,
       averageGasUsed: this.averageGasUsage,
-      nativeTokenPriceUSD: this.nativeTokenPricesUSD[chain.chainId] || 1,
+      nativeTokenPriceUSD: (this.nativeTokenPricesUSD as Record<number, number>)[chain.chainId] || 1,
       averageConfirmationTime: chain.blockTime
     };
   }

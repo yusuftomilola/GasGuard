@@ -1,13 +1,15 @@
-import { Controller, Get, Query, BadRequestException } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { Controller, Get, Query, BadRequestException, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { CrossChainGasService } from '../services/cross-chain-gas.service';
 import { 
   CrossChainGasRequest, 
   CrossChainGasResponse,
   SupportedChain 
 } from '../schemas/cross-chain-gas.schema';
+import { Public, Roles, Role, JwtAuthGuard, RolesGuard } from '../auth';
 
 @ApiTags('Cross-Chain Gas Comparison')
+@ApiBearerAuth()
 @Controller()
 export class CrossChainGasController {
   constructor(private readonly crossChainGasService: CrossChainGasService) {}
@@ -58,14 +60,19 @@ export class CrossChainGasController {
     return this.crossChainGasService.getSupportedChains();
   }
 
+  @Roles(Role.ADMIN)
   @Get('v1/analytics/cross-chain-gas/refresh')
   @ApiOperation({ 
     summary: 'Refresh gas price data',
-    description: 'Force refresh of gas price data and native token prices (admin endpoint)'
+    description: 'Force refresh of gas price data and native token prices (admin endpoint). Requires admin role.'
   })
   @ApiResponse({ 
     status: 200, 
     description: 'Gas price data refreshed successfully'
+  })
+  @ApiResponse({ 
+    status: 403, 
+    description: 'Forbidden - Requires admin role'
   })
   async refreshGasData(): Promise<{ message: string; timestamp: number }> {
     await this.crossChainGasService.updateNativeTokenPrices();

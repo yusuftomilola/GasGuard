@@ -1,21 +1,27 @@
-import { Controller, Get, Post, Query, Param, HttpCode, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Query, Param, HttpCode, HttpStatus, Logger, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiParam } from '@nestjs/swagger';
 import { ReportService } from '../services/report.service';
 import { Report } from '../entities/report.entity';
+import { Roles, ViewerAndAbove, OperatorAndAbove } from '../../rbac/decorators';
+import { RolesGuard } from '../../rbac/guards';
+import { UserRole } from '../../rbac/enums';
 
 @ApiTags('Reports')
 @Controller('reports')
+@UseGuards(RolesGuard)
 export class ReportController {
   private readonly logger = new Logger(ReportController.name);
 
   constructor(private readonly reportService: ReportService) {}
 
   @Post('gas')
+  @OperatorAndAbove()
   @ApiOperation({ summary: 'Trigger ad-hoc gas report generation' })
   @ApiQuery({ name: 'merchantId', description: 'ID of the merchant to generate report for', required: true })
   @ApiQuery({ name: 'period', description: 'Report period (weekly or monthly)', enum: ['weekly', 'monthly'], required: true })
   @ApiResponse({ status: 200, description: 'Report generation triggered successfully' })
   @ApiResponse({ status: 400, description: 'Invalid parameters' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires operator or admin role' })
   @HttpCode(HttpStatus.OK)
   async generateGasReport(
     @Query('merchantId') merchantId: string,
@@ -37,10 +43,12 @@ export class ReportController {
   }
 
   @Get('gas/status/:reportId')
+  @ViewerAndAbove()
   @ApiOperation({ summary: 'Check status of a gas report' })
   @ApiParam({ name: 'reportId', description: 'ID of the report to check status for', required: true })
   @ApiResponse({ status: 200, description: 'Report status retrieved successfully', type: Report })
   @ApiResponse({ status: 404, description: 'Report not found' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires authentication' })
   async getReportStatus(@Param('reportId') reportId: string): Promise<Report> {
     try {
       this.logger.log(`Request to check status of report ${reportId}`);
@@ -59,11 +67,13 @@ export class ReportController {
   }
 
   @Get('gas/history')
+  @ViewerAndAbove()
   @ApiOperation({ summary: 'Get report history for a merchant' })
   @ApiQuery({ name: 'merchantId', description: 'ID of the merchant', required: true })
   @ApiQuery({ name: 'period', description: 'Report period (weekly or monthly)', enum: ['weekly', 'monthly'], required: false })
   @ApiQuery({ name: 'limit', description: 'Number of reports to return', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Report history retrieved successfully', type: [Report] })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires authentication' })
   async getReportHistory(
     @Query('merchantId') merchantId: string,
     @Query('period') period?: 'weekly' | 'monthly',
@@ -80,10 +90,12 @@ export class ReportController {
   }
 
   @Get('gas/download/:reportId')
+  @ViewerAndAbove()
   @ApiOperation({ summary: 'Download a generated gas report' })
   @ApiParam({ name: 'reportId', description: 'ID of the report to download', required: true })
   @ApiResponse({ status: 200, description: 'Report downloaded successfully' })
   @ApiResponse({ status: 404, description: 'Report not found or not ready' })
+  @ApiResponse({ status: 403, description: 'Forbidden - requires authentication' })
   async downloadReport(@Param('reportId') reportId: string): Promise<any> {
     try {
       this.logger.log(`Request to download report ${reportId}`);

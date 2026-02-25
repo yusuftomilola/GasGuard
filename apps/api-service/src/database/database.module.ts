@@ -5,7 +5,8 @@ import {
   Transaction, 
   Merchant, 
   Chain, 
-  AnalysisResult 
+  AnalysisResult,
+  User,
 } from './entities';
 import { ChainPerformanceMetric } from '../chain-reliability/entities/chain-performance-metric.entity';
 import { ApiPerformanceMetric, ApiPerformanceAggregate } from '../performance-monitoring/entities/api-performance-metric.entity';
@@ -28,6 +29,7 @@ import { AuditLog, ApiKey } from '../audit/entities';
           Merchant, 
           Chain, 
           AnalysisResult, 
+          User,
           ChainPerformanceMetric,
           ApiPerformanceMetric,
           ApiPerformanceAggregate,
@@ -50,6 +52,7 @@ import { AuditLog, ApiKey } from '../audit/entities';
       Merchant, 
       Chain, 
       AnalysisResult, 
+      User,
       ChainPerformanceMetric,
       ApiPerformanceMetric,
       ApiPerformanceAggregate,

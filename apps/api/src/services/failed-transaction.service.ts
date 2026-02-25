@@ -65,7 +65,7 @@ export class FailedTransactionService {
     const { revertReason, metadata, gasUsed, gasPrice } = transactionData;
 
     // Check for underpriced gas
-    if (gasPrice && this.isUnderpriced(gasPrice, transactionData.chainId!)) {
+    if (gasPrice && await this.isUnderpriced(gasPrice, transactionData.chainId!)) {
       return 'underpriced_gas';
     }
 

@@ -7,9 +7,10 @@ import {
   Query, 
   HttpException,
   HttpStatus,
-  Logger
+  Logger,
+  UseGuards,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { 
   TransactionAnalysisRequest,
   TransactionAnalysisResponse,
@@ -17,8 +18,10 @@ import {
   FailedTransactionEvent
 } from '../schemas/failed-transaction.schema';
 import { TransactionAnalysisService } from '../services/transaction-analysis.service';
+import { Public, Roles, Role, JwtAuthGuard, RolesGuard } from '../auth';
 
 @ApiTags('failed-transactions')
+@ApiBearerAuth()
 @Controller({ path: 'failed-transactions', version: '1' })
 export class FailedTransactionController {
   private readonly logger = new Logger(FailedTransactionController.name);
@@ -231,6 +234,7 @@ export class FailedTransactionController {
     }
   }
 
+  @Public()
   @Get('health')
   @ApiOperation({ 
     summary: 'Health check endpoint',

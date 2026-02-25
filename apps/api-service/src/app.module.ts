@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
 import { HealthModule } from './health/health.module';
 import { ScannerModule } from './scanner/scanner.module';
 import { AnalyzerModule } from './analyzer/analyzer.module';
@@ -12,7 +13,8 @@ import { GasEstimationModule } from './gas-estimation/gas-estimation.module';
 import { ChainReliabilityModule } from './chain-reliability/chain-reliability.module';
 import { PerformanceMonitoringModule } from './performance-monitoring/performance-monitoring.module';
 import { GasSubsidyModule } from './gas-subsidy/gas-subsidy.module';
-import { AuditModule } from './audit/audit.module';
+import { RbacModule, RolesGuard } from './rbac';
+import { AuthModule } from './auth';
 import databaseConfig from './config/database.config';
 
 @Module({
@@ -22,6 +24,8 @@ import databaseConfig from './config/database.config';
       load: [databaseConfig],
     }),
     DatabaseModule,
+    AuthModule,
+    RbacModule,
     HealthModule, 
     ScannerModule, 
     AnalyzerModule, 
@@ -34,6 +38,14 @@ import databaseConfig from './config/database.config';
     PerformanceMonitoringModule,
     GasSubsidyModule,
     AuditModule,
+  ],
+  providers: [
+    // Apply RolesGuard globally to enforce RBAC on all routes
+    // Routes without @Roles decorator will be public
+    {
+      provide: APP_GUARD,
+      useClass: RolesGuard,
+    },
   ],
 })
 export class AppModule {}

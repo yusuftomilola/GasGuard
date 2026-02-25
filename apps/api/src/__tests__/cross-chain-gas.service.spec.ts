@@ -139,7 +139,7 @@ describe('CrossChainGasService', () => {
       const ethereumChain = result.chains.find(chain => chain.chainId === 1);
 
       // Polygon should be cheaper than Ethereum for transfers
-      expect(polygonChain.estimatedCostUSD).toBeLessThan(ethereumChain.estimatedCostUSD);
+      expect(polygonChain!.estimatedCostUSD).toBeLessThan(ethereumChain!.estimatedCostUSD);
     });
   });
 });
