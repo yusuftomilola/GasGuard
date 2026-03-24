@@ -13,6 +13,7 @@ import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { DynamicPricingService } from './services/dynamic-pricing.service';
 import { GasPriceHistoryService } from './services/gas-price-history.service';
 import { NetworkMonitorService } from './services/network-monitor.service';
+import { NetworkConfigService } from './config/network-config.service';
 import {
   GetGasEstimateDto,
   GasEstimateResponseDto,
@@ -29,6 +30,7 @@ export class GasEstimationController {
     private dynamicPricingService: DynamicPricingService,
     private gasPriceHistoryService: GasPriceHistoryService,
     private networkMonitorService: NetworkMonitorService,
+    private networkConfigService: NetworkConfigService,
   ) {}
 
   /**
@@ -290,7 +292,7 @@ export class GasEstimationController {
       status: 'healthy',
       timestamp: new Date().toISOString(),
       version: '1.0.0',
-      supportedChains: ['soroban-mainnet', 'soroban-testnet'],
+      supportedChains: this.networkConfigService.getSupportedChainIds(),
     };
   }
 

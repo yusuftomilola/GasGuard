@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { NetworkMetrics, GasPriceSnapshot } from '../interfaces/gas-price.interface';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { NetworkConfigService } from '../config/network-config.service';
 
 /**
  * NetworkMonitorService
@@ -14,6 +15,8 @@ export class NetworkMonitorService {
   // In-memory cache for network metrics (would be replaced with actual RPC calls)
   private metricsCache: Map<string, NetworkMetrics> = new Map();
   private priceSnapshotCache: Map<string, GasPriceSnapshot> = new Map();
+
+  constructor(private readonly networkConfigService: NetworkConfigService) {}
 
   /**
    * Get current network metrics for a chain
@@ -51,8 +54,7 @@ export class NetworkMonitorService {
   @Cron(CronExpression.EVERY_10_SECONDS)
   async updateNetworkMetrics(): Promise<void> {
     try {
-      // Update for all monitored chains
-      const chainIds = ['soroban-testnet', 'soroban-mainnet'];
+      const chainIds = this.networkConfigService.getSupportedChainIds();
 
       for (const chainId of chainIds) {
         const metrics = await this.fetchNetworkMetricsFromRpc(chainId);
@@ -75,19 +77,22 @@ export class NetworkMonitorService {
   private async fetchNetworkMetricsFromRpc(chainId: string): Promise<NetworkMetrics> {
     // This would connect to actual Soroban RPC in production
     // For now, return mock data with some randomization to simulate network conditions
+    const network = this.networkConfigService.getNetworkConfig(chainId);
 
-    const baseLoad = 35; // baseline network load
+    const baseLoad = network.baselineLoad;
     const randomFluctuation = Math.random() * 30 - 15; // -15 to +15
     const congestionLevel = Math.max(0, Math.min(100, baseLoad + randomFluctuation));
 
     return {
       congestionLevel,
       gasPoolUtilization: congestionLevel * 0.8,
-      averageTransactionTime: 4000 + Math.random() * 2000, // 4-6 seconds
+      averageTransactionTime: network.averageBlockTimeMs + Math.random() * 2000,
       pendingTransactionCount: Math.floor(congestionLevel * 10),
-      lastBlockGasUsed: 75000000 + Math.floor(Math.random() * 25000000),
-      lastBlockGasLimit: 100000000,
-      historicalAverageGasPrice: 1000, // stroops per instruction
+      lastBlockGasUsed:
+        network.defaultBlockGasLimit * 0.75 +
+        Math.floor(Math.random() * (network.defaultBlockGasLimit * 0.25)),
+      lastBlockGasLimit: network.defaultBlockGasLimit,
+      historicalAverageGasPrice: network.historicalAverageGasPrice,
       priceVolatility: congestionLevel * 0.5, // volatility increases with congestion
     };
   }
@@ -96,13 +101,14 @@ export class NetworkMonitorService {
    * Create a gas price snapshot based on current metrics
    */
   private async createGasPriceSnapshot(chainId: string): Promise<GasPriceSnapshot> {
+    const network = this.networkConfigService.getNetworkConfig(chainId);
     const metrics = await this.getNetworkMetrics(chainId);
 
     // Calculate surge multiplier based on congestion
     const surgeMultiplier = this.calculateSurgeMultiplier(metrics.congestionLevel);
 
     // Base price (stroops per instruction) - Soroban default
-    const basePrice = 1000;
+    const basePrice = network.baseFeePerInstruction;
     const recommendedFeeRate = basePrice * surgeMultiplier;
 
     // Estimate price confidence (higher during stable, lower during volatile periods)
@@ -111,7 +117,7 @@ export class NetworkMonitorService {
     return {
       id: `snapshot-${chainId}-${Date.now()}`,
       chainId,
-      chainName: chainId === 'soroban-mainnet' ? 'Soroban Mainnet' : 'Soroban Testnet',
+      chainName: network.chainName,
       timestamp: new Date(),
       baseFeePerInstruction: basePrice,
       surgePriceMultiplier: surgeMultiplier,
@@ -153,6 +159,7 @@ export class NetworkMonitorService {
     chainId: string,
     hoursBack: number = 24,
   ): Promise<GasPriceSnapshot[]> {
+    const network = this.networkConfigService.getNetworkConfig(chainId);
     // In production, query database for historical snapshots
     const snapshots: GasPriceSnapshot[] = [];
     const now = Date.now();
@@ -164,15 +171,17 @@ export class NetworkMonitorService {
       snapshots.push({
         id: `hist-${chainId}-${i}`,
         chainId,
-        chainName: chainId === 'soroban-mainnet' ? 'Soroban Mainnet' : 'Soroban Testnet',
+        chainName: network.chainName,
         timestamp,
-        baseFeePerInstruction: 1000,
+        baseFeePerInstruction: network.baseFeePerInstruction,
         surgePriceMultiplier: this.calculateSurgeMultiplier(congestionAtTime),
-        recommendedFeeRate: 1000 * this.calculateSurgeMultiplier(congestionAtTime),
+        recommendedFeeRate:
+          network.baseFeePerInstruction *
+          this.calculateSurgeMultiplier(congestionAtTime),
         networkLoad: congestionAtTime,
         memoryPoolSize: 0,
         transactionCount: Math.floor(congestionAtTime * 10),
-        averageBlockTime: 4000 + Math.random() * 2000,
+        averageBlockTime: network.averageBlockTimeMs + Math.random() * 2000,
         volatilityIndex: congestionAtTime * 0.4,
         priceConfidence: Math.max(40, 100 - congestionAtTime),
       });

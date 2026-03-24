@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DynamicPricingService } from '../services/dynamic-pricing.service';
+import { NetworkConfigService } from '../config/network-config.service';
 import { NetworkMonitorService } from '../services/network-monitor.service';
 import { GasPriceHistoryService } from '../services/gas-price-history.service';
 import { GasEstimationController } from '../gas-estimation.controller';
@@ -23,6 +24,7 @@ describe('Dynamic Gas Estimation Engine', () => {
       controllers: [GasEstimationController],
       providers: [
         DynamicPricingService,
+        NetworkConfigService,
         NetworkMonitorService,
         GasPriceHistoryService,
         {
