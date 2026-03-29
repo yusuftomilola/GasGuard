@@ -13,6 +13,7 @@ import {
   FeeAnalytics,
   AdminFeeSettings,
   ApprovalRequest,
+  ScheduledUpdate,
 } from "../interfaces/fee-config.interface";
 
 /**
@@ -28,6 +29,7 @@ export class FeeConfigurationService {
   private configurationHistory: FeeConfigurationHistory[] = [];
   private feeEvents: FeeChangeEvent[] = [];
   private pendingApprovals: Map<string, ApprovalRequest> = new Map();
+  private scheduledUpdates: Map<string, ScheduledUpdate> = new Map();
   private adminSettings: AdminFeeSettings;
 
   constructor() {
@@ -89,6 +91,17 @@ export class FeeConfigurationService {
       throw new BadRequestException(
         "Large fee changes must be submitted through the multisig approval workflow.",
       );
+    }
+
+    const effectiveDate = this.getEffectiveDateWithDelay(updateRequest);
+    if (effectiveDate > new Date()) {
+      await this.scheduleFeeUpdate(
+        configId,
+        updateRequest,
+        adminUserId,
+        effectiveDate,
+      );
+      return currentConfig;
     }
 
     return await this.applyFeeUpdate(
@@ -211,6 +224,8 @@ export class FeeConfigurationService {
       adminUserId,
     );
 
+    const effectiveDate = this.getEffectiveDateWithDelay(updateRequest);
+
     const approvalRequest: ApprovalRequest = {
       id: this.generateId(),
       configurationId: configId,
@@ -228,15 +243,16 @@ export class FeeConfigurationService {
       createdAt: new Date(),
       updatedAt: new Date(),
       reason: updateRequest.reason,
-      effectiveDate: updateRequest.effectiveDate || new Date(),
+      effectiveDate,
       notifyUsers: updateRequest.notifyUsers ?? true,
     };
 
     this.pendingApprovals.set(approvalRequest.id, approvalRequest);
 
     if (approvalRequest.approvals.length >= approvalRequest.threshold) {
-      await this.executeApprovalRequest(approvalRequest);
       approvalRequest.status = "APPROVED";
+      approvalRequest.updatedAt = new Date();
+      await this.executeApprovalRequest(approvalRequest);
     }
 
     this.logger.log(
@@ -365,12 +381,110 @@ export class FeeConfigurationService {
       );
     }
 
+    if (approvalRequest.effectiveDate > new Date()) {
+      await this.scheduleFeeUpdate(
+        approvalRequest.configurationId,
+        approvalRequest.request,
+        approvalRequest.requestedBy,
+        approvalRequest.effectiveDate,
+      );
+      return;
+    }
+
     await this.applyFeeUpdate(
       approvalRequest.configurationId,
       currentConfig,
       approvalRequest.request,
       approvalRequest.requestedBy,
     );
+  }
+
+  async getScheduledUpdates(
+    configId?: string,
+  ): Promise<ScheduledUpdate[]> {
+    const updates = Array.from(this.scheduledUpdates.values());
+    return configId
+      ? updates.filter((update) => update.configurationId === configId)
+      : updates;
+  }
+
+  async getScheduledUpdate(
+    scheduledUpdateId: string,
+  ): Promise<ScheduledUpdate> {
+    const scheduledUpdate = this.scheduledUpdates.get(scheduledUpdateId);
+    if (!scheduledUpdate) {
+      throw new NotFoundException(
+        `Scheduled update ${scheduledUpdateId} not found`,
+      );
+    }
+    return { ...scheduledUpdate };
+  }
+
+  async processPendingScheduledUpdates(): Promise<ScheduledUpdate[]> {
+    const now = new Date();
+    const executed: ScheduledUpdate[] = [];
+
+    for (const scheduledUpdate of this.scheduledUpdates.values()) {
+      if (
+        scheduledUpdate.status === "SCHEDULED" &&
+        scheduledUpdate.scheduledAt <= now
+      ) {
+        const currentConfig = this.configurations.get(
+          scheduledUpdate.configurationId,
+        );
+        if (currentConfig) {
+          await this.applyFeeUpdate(
+            scheduledUpdate.configurationId,
+            currentConfig,
+            scheduledUpdate.request,
+            scheduledUpdate.createdBy,
+          );
+          scheduledUpdate.status = "EXECUTED";
+          scheduledUpdate.updatedAt = new Date();
+          this.scheduledUpdates.set(scheduledUpdate.id, scheduledUpdate);
+          executed.push({ ...scheduledUpdate });
+        }
+      }
+    }
+
+    return executed;
+  }
+
+  private async scheduleFeeUpdate(
+    configId: string,
+    updateRequest: FeeUpdateRequest,
+    adminUserId: string,
+    scheduledAt: Date,
+  ): Promise<ScheduledUpdate> {
+    const scheduledUpdate: ScheduledUpdate = {
+      id: this.generateId(),
+      configurationId: configId,
+      request: { ...updateRequest },
+      createdBy: adminUserId,
+      scheduledAt,
+      status: "SCHEDULED",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    this.scheduledUpdates.set(scheduledUpdate.id, scheduledUpdate);
+    this.logger.log(
+      `Scheduled fee update ${scheduledUpdate.id} for ${scheduledAt.toISOString()}`,
+    );
+    return { ...scheduledUpdate };
+  }
+
+  private getEffectiveDateWithDelay(
+    updateRequest: FeeUpdateRequest,
+  ): Date {
+    const now = new Date();
+    const delayMs = this.adminSettings.timelockDelayMinutes * 60 * 1000;
+    const minimumEffectiveDate = new Date(now.getTime() + delayMs);
+    const requestedDate = updateRequest.effectiveDate ?? minimumEffectiveDate;
+
+    return requestedDate < minimumEffectiveDate
+      ? minimumEffectiveDate
+      : requestedDate;
   }
 
   private isMultisigEnabled(): boolean {
