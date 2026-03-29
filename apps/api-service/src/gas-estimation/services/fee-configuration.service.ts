@@ -82,78 +82,21 @@ export class FeeConfigurationService {
       );
     }
 
-    // Check if approval is required for large changes
-    if (this.adminSettings.requireApprovalForLargeChanges) {
-      const requiresApproval = this.checkIfApprovalRequired(
-        currentConfig,
-        updateRequest,
+    if (this.isMultisigApprovalRequired(currentConfig, updateRequest)) {
+      this.logger.warn(
+        `Large fee change requires multisig approval: ${updateRequest.reason}`,
       );
-      if (requiresApproval) {
-        this.logger.warn(
-          `Large fee change requires approval: ${updateRequest.reason}`,
-        );
-        // In production, this would trigger approval workflow
-        // For now, we'll allow it but log the warning
-      }
+      throw new BadRequestException(
+        "Large fee changes must be submitted through the multisig approval workflow.",
+      );
     }
 
-    // Create new configuration
-    const newConfiguration: FeeConfiguration = {
-      ...currentConfig,
-      ...this.applyUpdateRequest(currentConfig, updateRequest),
-      updatedAt: new Date(),
-      version: currentConfig.version + 1,
-    };
-
-    // Detect changes
-    const changes = this.detectChanges(currentConfig, newConfiguration);
-
-    // Create change event
-    const changeEvent: FeeChangeEvent = {
-      id: this.generateId(),
-      configurationId: configId,
-      type: "FEE_UPDATED",
-      timestamp: new Date(),
-      oldConfiguration: { ...currentConfig },
-      newConfiguration: { ...newConfiguration },
-      changes,
-      metadata: {
-        updatedBy: adminUserId,
-        reason: updateRequest.reason,
-        effectiveDate: updateRequest.effectiveDate || new Date(),
-        notifyUsers: updateRequest.notifyUsers ?? true,
-        version: newConfiguration.version,
-      },
-    };
-
-    // Store new configuration
-    this.configurations.set(configId, newConfiguration);
-
-    // Add to history
-    this.configurationHistory.push({
-      id: this.generateId(),
-      configurationId: configId,
-      version: newConfiguration.version,
-      configuration: { ...newConfiguration },
-      changeEvent,
-      createdAt: new Date(),
-      createdBy: adminUserId,
-    });
-
-    // Store event
-    this.feeEvents.push(changeEvent);
-
-    // Log the change (removed emit for now)
-    this.logger.log(
-      `Fee configuration updated by ${adminUserId}: ${updateRequest.reason}`,
+    return await this.applyFeeUpdate(
+      configId,
+      currentConfig,
+      updateRequest,
+      adminUserId,
     );
-
-    // Send user notifications if requested
-    if (updateRequest.notifyUsers) {
-      await this.notifyUsersOfFeeChange(changeEvent);
-    }
-
-    return { ...newConfiguration };
   }
 
   /**
@@ -223,6 +166,286 @@ export class FeeConfigurationService {
     );
 
     return { ...newConfig };
+  }
+
+  /**
+   * Create a pending approval request for a large fee update
+   */
+  async createApprovalRequest(
+    configId: string,
+    updateRequest: FeeUpdateRequest,
+    adminUserId: string,
+  ): Promise<ApprovalRequest> {
+    if (!this.adminSettings.allowFeeUpdates) {
+      throw new BadRequestException("Fee updates are currently disabled");
+    }
+
+    const currentConfig = this.configurations.get(configId);
+    if (!currentConfig) {
+      throw new NotFoundException(`Fee configuration ${configId} not found`);
+    }
+
+    const validation = this.validateFeeUpdate(currentConfig, updateRequest);
+    if (!validation.isValid) {
+      throw new BadRequestException(
+        `Invalid fee update: ${validation.errors.join(", ")}`,
+      );
+    }
+
+    if (!this.isMultisigApprovalRequired(currentConfig, updateRequest)) {
+      throw new BadRequestException(
+        "Approval request is not required for this update. Use updateConfiguration directly.",
+      );
+    }
+
+    if (
+      this.adminSettings.multisigSigners.length <
+      this.adminSettings.multisigApprovalThreshold
+    ) {
+      throw new BadRequestException(
+        "Multisig signer configuration is invalid: threshold must be less than or equal to signer count.",
+      );
+    }
+
+    const isRequesterSigner = this.adminSettings.multisigSigners.includes(
+      adminUserId,
+    );
+
+    const approvalRequest: ApprovalRequest = {
+      id: this.generateId(),
+      configurationId: configId,
+      requestedBy: adminUserId,
+      request: { ...updateRequest },
+      requiredSigners: [...this.adminSettings.multisigSigners],
+      approvals: isRequesterSigner ? [adminUserId] : [],
+      rejections: [],
+      threshold: this.adminSettings.multisigApprovalThreshold,
+      status: isRequesterSigner
+        ? this.adminSettings.multisigApprovalThreshold <= 1
+          ? "APPROVED"
+          : "PENDING"
+        : "PENDING",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      reason: updateRequest.reason,
+      effectiveDate: updateRequest.effectiveDate || new Date(),
+      notifyUsers: updateRequest.notifyUsers ?? true,
+    };
+
+    this.pendingApprovals.set(approvalRequest.id, approvalRequest);
+
+    if (approvalRequest.approvals.length >= approvalRequest.threshold) {
+      await this.executeApprovalRequest(approvalRequest);
+      approvalRequest.status = "APPROVED";
+    }
+
+    this.logger.log(
+      `Multisig approval request created by ${adminUserId}: ${approvalRequest.id}`,
+    );
+
+    return { ...approvalRequest };
+  }
+
+  async getApprovalRequests(
+    configId?: string,
+  ): Promise<ApprovalRequest[]> {
+    const requests = Array.from(this.pendingApprovals.values());
+    return configId
+      ? requests.filter((request) => request.configurationId === configId)
+      : requests;
+  }
+
+  async getApprovalRequest(approvalRequestId: string): Promise<ApprovalRequest> {
+    const approvalRequest = this.pendingApprovals.get(approvalRequestId);
+    if (!approvalRequest) {
+      throw new NotFoundException(
+        `Approval request ${approvalRequestId} not found`,
+      );
+    }
+    return { ...approvalRequest };
+  }
+
+  async approveApprovalRequest(
+    approvalRequestId: string,
+    adminUserId: string,
+  ): Promise<ApprovalRequest> {
+    const approvalRequest = this.pendingApprovals.get(approvalRequestId);
+    if (!approvalRequest) {
+      throw new NotFoundException(
+        `Approval request ${approvalRequestId} not found`,
+      );
+    }
+
+    if (approvalRequest.status !== "PENDING") {
+      throw new BadRequestException(
+        `Approval request ${approvalRequestId} is already ${approvalRequest.status}`,
+      );
+    }
+
+    if (!this.adminSettings.multisigSigners.includes(adminUserId)) {
+      throw new BadRequestException(
+        `User ${adminUserId} is not authorized to approve this request`,
+      );
+    }
+
+    if (approvalRequest.approvals.includes(adminUserId)) {
+      throw new BadRequestException(
+        `User ${adminUserId} has already approved this request`,
+      );
+    }
+
+    approvalRequest.approvals.push(adminUserId);
+    approvalRequest.updatedAt = new Date();
+
+    if (approvalRequest.approvals.length >= approvalRequest.threshold) {
+      await this.executeApprovalRequest(approvalRequest);
+      approvalRequest.status = "APPROVED";
+      approvalRequest.updatedAt = new Date();
+    }
+
+    this.pendingApprovals.set(approvalRequest.id, approvalRequest);
+
+    return { ...approvalRequest };
+  }
+
+  async rejectApprovalRequest(
+    approvalRequestId: string,
+    adminUserId: string,
+  ): Promise<ApprovalRequest> {
+    const approvalRequest = this.pendingApprovals.get(approvalRequestId);
+    if (!approvalRequest) {
+      throw new NotFoundException(
+        `Approval request ${approvalRequestId} not found`,
+      );
+    }
+
+    if (approvalRequest.status !== "PENDING") {
+      throw new BadRequestException(
+        `Approval request ${approvalRequestId} is already ${approvalRequest.status}`,
+      );
+    }
+
+    if (!this.adminSettings.multisigSigners.includes(adminUserId)) {
+      throw new BadRequestException(
+        `User ${adminUserId} is not authorized to reject this request`,
+      );
+    }
+
+    if (approvalRequest.rejections.includes(adminUserId)) {
+      throw new BadRequestException(
+        `User ${adminUserId} has already rejected this request`,
+      );
+    }
+
+    approvalRequest.rejections.push(adminUserId);
+    approvalRequest.updatedAt = new Date();
+
+    if (
+      approvalRequest.rejections.length >=
+      approvalRequest.requiredSigners.length - approvalRequest.threshold + 1
+    ) {
+      approvalRequest.status = "REJECTED";
+      approvalRequest.updatedAt = new Date();
+    }
+
+    this.pendingApprovals.set(approvalRequest.id, approvalRequest);
+
+    return { ...approvalRequest };
+  }
+
+  private async executeApprovalRequest(
+    approvalRequest: ApprovalRequest,
+  ): Promise<void> {
+    const currentConfig = this.configurations.get(
+      approvalRequest.configurationId,
+    );
+    if (!currentConfig) {
+      throw new NotFoundException(
+        `Fee configuration ${approvalRequest.configurationId} not found`,
+      );
+    }
+
+    await this.applyFeeUpdate(
+      approvalRequest.configurationId,
+      currentConfig,
+      approvalRequest.request,
+      approvalRequest.requestedBy,
+    );
+  }
+
+  private isMultisigEnabled(): boolean {
+    return (
+      this.adminSettings.requireApprovalForLargeChanges &&
+      this.adminSettings.multisigSigners.length > 0 &&
+      this.adminSettings.multisigApprovalThreshold > 1
+    );
+  }
+
+  private isMultisigApprovalRequired(
+    currentConfig: FeeConfiguration,
+    updateRequest: FeeUpdateRequest,
+  ): boolean {
+    return (
+      this.isMultisigEnabled() &&
+      this.checkIfApprovalRequired(currentConfig, updateRequest)
+    );
+  }
+
+  private async applyFeeUpdate(
+    configId: string,
+    currentConfig: FeeConfiguration,
+    updateRequest: FeeUpdateRequest,
+    adminUserId: string,
+  ): Promise<FeeConfiguration> {
+    const newConfiguration: FeeConfiguration = {
+      ...currentConfig,
+      ...this.applyUpdateRequest(currentConfig, updateRequest),
+      updatedAt: new Date(),
+      version: currentConfig.version + 1,
+    };
+
+    const changes = this.detectChanges(currentConfig, newConfiguration);
+
+    const changeEvent: FeeChangeEvent = {
+      id: this.generateId(),
+      configurationId: configId,
+      type: "FEE_UPDATED",
+      timestamp: new Date(),
+      oldConfiguration: { ...currentConfig },
+      newConfiguration: { ...newConfiguration },
+      changes,
+      metadata: {
+        updatedBy: adminUserId,
+        reason: updateRequest.reason,
+        effectiveDate: updateRequest.effectiveDate || new Date(),
+        notifyUsers: updateRequest.notifyUsers ?? true,
+        version: newConfiguration.version,
+      },
+    };
+
+    this.configurations.set(configId, newConfiguration);
+
+    this.configurationHistory.push({
+      id: this.generateId(),
+      configurationId: configId,
+      version: newConfiguration.version,
+      configuration: { ...newConfiguration },
+      changeEvent,
+      createdAt: new Date(),
+      createdBy: adminUserId,
+    });
+
+    this.feeEvents.push(changeEvent);
+
+    this.logger.log(
+      `Fee configuration updated by ${adminUserId}: ${updateRequest.reason}`,
+    );
+
+    if (updateRequest.notifyUsers) {
+      await this.notifyUsersOfFeeChange(changeEvent);
+    }
+
+    return { ...newConfiguration };
   }
 
   /**
