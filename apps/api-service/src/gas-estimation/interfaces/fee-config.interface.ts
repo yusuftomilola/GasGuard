@@ -121,6 +121,25 @@ export interface FeeValidationResult {
   };
 }
 
+export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED";
+
+export interface ApprovalRequest {
+  id: string;
+  configurationId: string;
+  requestedBy: string;
+  request: FeeUpdateRequest;
+  requiredSigners: string[];
+  approvals: string[];
+  rejections: string[];
+  threshold: number;
+  status: ApprovalStatus;
+  createdAt: Date;
+  updatedAt: Date;
+  reason: string;
+  effectiveDate: Date;
+  notifyUsers: boolean;
+}
+
 export interface FeeConfigurationHistory {
   id: string;
   configurationId: string;
@@ -200,7 +219,9 @@ export interface AdminFeeSettings {
   allowFeeUpdates: boolean;
   requireApprovalForLargeChanges: boolean;
   largeChangeThreshold: number; // percentage change
-  approvalRequiredUsers: string[]; // Admin user IDs required for approval
+  approvalRequiredUsers: string[]; // Legacy list of admin user IDs required for approval
+  multisigSigners: string[]; // Authorized multisig signer user IDs
+  multisigApprovalThreshold: number; // Number of signers required to approve large changes
   defaultGracePeriod: number; // days before fee changes take effect
   enableUserNotifications: boolean;
   notificationChannels: ("email" | "sms" | "in-app" | "webhook")[];

@@ -12,6 +12,7 @@ import {
   FeeConfigurationHistory,
   FeeAnalytics,
   AdminFeeSettings,
+  ApprovalRequest,
 } from "../interfaces/fee-config.interface";
 
 /**
@@ -26,6 +27,7 @@ export class FeeConfigurationService {
   private configurations: Map<string, FeeConfiguration> = new Map();
   private configurationHistory: FeeConfigurationHistory[] = [];
   private feeEvents: FeeChangeEvent[] = [];
+  private pendingApprovals: Map<string, ApprovalRequest> = new Map();
   private adminSettings: AdminFeeSettings;
 
   constructor() {
