@@ -1,3 +1,5 @@
+use cosmwasm_schema::cw_serde;
+
 #[cw_serde]
 pub struct Auth {
     pub nonce: u64,
@@ -20,10 +22,6 @@ pub enum ExecuteMsg {
         msgs: Vec<BatchMsg>,
         auth: Auth,
     },
-
-    Batch {
-        msgs: Vec<BatchMsg>,
-    },
 }
 
 #[cw_serde]
@@ -36,4 +34,17 @@ pub enum BatchMsg {
         token_id: String,
         metadata: PropertyMetadata,
     },
+}
+
+#[cw_serde]
+pub struct PropertyMetadata {
+    pub name: String,
+    pub description: String,
+    pub image_url: String,
+    pub area_sqft: u32,
+    pub beds: u8,
+    pub baths: u8,
+    pub year_built: u16,
+    pub property_type: String,
+    pub is_active: bool,
 }
