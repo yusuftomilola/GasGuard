@@ -219,4 +219,190 @@ describe('Solidity Reentrancy Guard Analysis', () => {
       expect(fallbackIssues).toHaveLength(0);
     });
   });
+
+  describe('Timelock Security For Sensitive Operations', () => {
+    it('should detect immediate sensitive actions without timelock scheduling', async () => {
+      const vulnerableContract = `
+        contract VulnerableTreasury {
+            address public owner;
+            uint256 public treasury;
+
+            constructor() {
+                owner = msg.sender;
+            }
+
+            function withdrawFunds(address payable recipient, uint256 amount) external {
+                require(msg.sender == owner, "Not owner");
+                treasury -= amount;
+                recipient.transfer(amount);
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: vulnerableContract,
+      });
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          ruleId: 'sol-009',
+          severity: 'high',
+          message: expect.stringContaining('lacks enforced timelock'),
+        })
+      );
+    });
+
+    it('should detect execute paths without delay enforcement', async () => {
+      const vulnerableContract = `
+        contract MissingDelay {
+            address public owner;
+            mapping(bytes32 => bool) public queued;
+
+            function scheduleOperation(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                queued[opId] = true;
+            }
+
+            function executeOperation(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                require(queued[opId], "Not queued");
+                // Missing block.timestamp delay check
+                queued[opId] = false;
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: vulnerableContract,
+      });
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          ruleId: 'sol-009',
+          message: expect.stringContaining('does not enforce timelock delay'),
+        })
+      );
+    });
+
+    it('should detect missing authorization on timelock operations', async () => {
+      const vulnerableContract = `
+        contract MissingAuth {
+            mapping(bytes32 => uint256) public queuedAt;
+
+            function schedule(bytes32 opId) external {
+                queuedAt[opId] = block.timestamp + 1 days;
+            }
+
+            function execute(bytes32 opId) external {
+                require(block.timestamp >= queuedAt[opId], "Timelock not expired");
+                delete queuedAt[opId];
+            }
+
+            function cancel(bytes32 opId) external {
+                delete queuedAt[opId];
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: vulnerableContract,
+      });
+
+      const authIssues = result.issues.filter(
+        issue => issue.ruleId === 'sol-009' && issue.message.includes('lacks authorization')
+      );
+      expect(authIssues.length).toBeGreaterThan(0);
+    });
+
+    it('should detect timelock flows missing cancellation capability', async () => {
+      const vulnerableContract = `
+        contract MissingCancel {
+            address public owner;
+            mapping(bytes32 => uint256) public queuedAt;
+
+            function schedule(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                queuedAt[opId] = block.timestamp + 1 days;
+            }
+
+            function execute(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                require(block.timestamp >= queuedAt[opId], "Timelock not expired");
+                delete queuedAt[opId];
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: vulnerableContract,
+      });
+
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          ruleId: 'sol-009',
+          message: expect.stringContaining('missing cancellation capability'),
+        })
+      );
+    });
+
+    it('should not flag properly timelocked and authorized sensitive operations', async () => {
+      const secureContract = `
+        contract SecureTimelock {
+            address public owner;
+            uint256 public constant TIMELOCK_DELAY = 1 days;
+
+            struct QueuedOperation {
+                uint256 executeAfter;
+                bool exists;
+            }
+
+            mapping(bytes32 => QueuedOperation) public queuedOperations;
+
+            event OperationScheduled(bytes32 indexed opId, uint256 executeAfter);
+            event OperationExecuted(bytes32 indexed opId);
+            event OperationCancelled(bytes32 indexed opId);
+
+            constructor() {
+                owner = msg.sender;
+            }
+
+            function scheduleWithdraw(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                queuedOperations[opId] = QueuedOperation({
+                    executeAfter: block.timestamp + TIMELOCK_DELAY,
+                    exists: true
+                });
+                emit OperationScheduled(opId, queuedOperations[opId].executeAfter);
+            }
+
+            function executeWithdraw(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                require(queuedOperations[opId].exists, "Not queued");
+                require(block.timestamp >= queuedOperations[opId].executeAfter, "Timelock not expired");
+                delete queuedOperations[opId];
+                emit OperationExecuted(opId);
+            }
+
+            function cancelOperation(bytes32 opId) external {
+                require(msg.sender == owner, "Not owner");
+                require(queuedOperations[opId].exists, "Not queued");
+                delete queuedOperations[opId];
+                emit OperationCancelled(opId);
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: secureContract,
+      });
+
+      const timelockIssues = result.issues.filter(issue => issue.ruleId === 'sol-009');
+      expect(timelockIssues).toHaveLength(0);
+    });
+  });
 });

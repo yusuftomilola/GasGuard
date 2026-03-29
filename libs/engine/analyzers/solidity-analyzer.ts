@@ -91,6 +91,16 @@ export class SolidityAnalyzer extends BaseAnalyzer implements Analyzer {
       tags: ['security', 'fallback', 'receive', 'validation'],
       documentationUrl: 'https://docs.gasguard.dev/rules/sol-007',
     },
+    {
+      id: 'sol-009',
+      name: 'Missing Timelock For Sensitive Operations',
+      description: 'Critical operations should be scheduled and executed only after a mandatory delay',
+      severity: Severity.HIGH,
+      category: 'security',
+      enabled: true,
+      tags: ['security', 'timelock', 'governance', 'delay', 'authorization'],
+      documentationUrl: 'https://docs.gasguard.dev/rules/sol-009',
+    },
   ];
   
   getName(): string {
@@ -232,6 +242,26 @@ export class SolidityAnalyzer extends BaseAnalyzer implements Analyzer {
             description: 'Keep fallback minimal: reject unknown calls, avoid sensitive logic, and validate accepted ETH transfers',
             codeSnippet: 'fallback() external payable {\n    revert("Unknown function call");\n}',
             documentationUrl: 'https://docs.gasguard.dev/rules/sol-007',
+          },
+        })));
+      }
+
+      // Rule: sol-009 - Missing Timelock For Sensitive Operations
+      if (this.isRuleEnabled('sol-009', config)) {
+        const missingTimelocks = this.detectMissingTimelockForSensitiveOperations(code);
+        findings.push(...missingTimelocks.map(location => ({
+          ruleId: 'sol-009',
+          message: location.message,
+          severity: this.getRuleSeverity('sol-009', config),
+          location: {
+            file: filePath,
+            startLine: location.startLine,
+            endLine: location.endLine,
+          },
+          suggestedFix: {
+            description: 'Use a timelock flow: schedule operation, enforce delay with block.timestamp checks, and execute after delay with role-based access control',
+            codeSnippet: 'bytes32 opId = keccak256(data);\npendingOperations[opId] = block.timestamp + TIMELOCK_DELAY;\nemit OperationScheduled(opId, pendingOperations[opId]);\n\nrequire(block.timestamp >= pendingOperations[opId], "Timelock not expired");\nexecuteOperation(opId);\nemit OperationExecuted(opId);',
+            documentationUrl: 'https://docs.gasguard.dev/rules/sol-009',
           },
         })));
       }
@@ -570,6 +600,178 @@ export class SolidityAnalyzer extends BaseAnalyzer implements Analyzer {
           endLine: startLine,
         });
       }
+    }
+
+    return findings;
+  }
+
+  private detectMissingTimelockForSensitiveOperations(
+    code: string,
+  ): Array<{ startLine: number; endLine: number; message: string }> {
+    const findings: Array<{ startLine: number; endLine: number; message: string }> = [];
+    const lines = code.split('\n');
+
+    const functionDecl = /^\s*function\s+(\w+)\s*\(([^)]*)\)\s*([^\{;]*)\{/;
+    const sensitiveNamePattern = /(withdraw|transferOwnership|upgrade|set(?:Config|Parameter|Fee|Admin|Owner)?|grantRole|revokeRole|pause|unpause|mint|burn|treasury|emergency)/i;
+    const schedulerNamePattern = /^(queue|schedule|propose)/i;
+    const executeNamePattern = /^execute/i;
+    const cancelNamePattern = /^cancel/i;
+
+    const contractHasTracking = /(pending|queued|operations?|timelock|eta|executeAfter|unlockTime|operationId)/i.test(code);
+    const contractHasSchedule = /function\s+(?:queue|schedule|propose)\w*\s*\(/i.test(code);
+    const contractHasExecute = /function\s+execute\w*\s*\(/i.test(code);
+    const contractHasCancel = /function\s+cancel\w*\s*\(/i.test(code);
+    const hasTimelockEvents = /event\s+\w*(Scheduled|Executed|Cancelled|Canceled)\w*\s*\(/i.test(code);
+
+    const hasDelayEnforcement = (body: string): boolean => {
+      const delayPatterns = [
+        /block\.timestamp\s*>=/,
+        /block\.timestamp\s*>\s*/,
+        /\+\s*(TIMELOCK|DELAY|timelock|delay)/,
+        /executeAfter|unlockTime|eta|readyAt|scheduledAt/i,
+      ];
+      return delayPatterns.some(pattern => pattern.test(body));
+    };
+
+    const hasAuthorization = (signature: string, body: string): boolean => {
+      const signatureAuth = /(onlyOwner|onlyAdmin|onlyRole|governance|timelockAdmin)/i;
+      const bodyAuth = [
+        /require\s*\([^)]*msg\.sender[^)]*(owner|admin|governance)[^)]*\)/i,
+        /hasRole\s*\(/,
+        /_checkRole\s*\(/,
+        /onlyRole\s*\(/,
+      ];
+
+      if (signatureAuth.test(signature)) {
+        return true;
+      }
+
+      return bodyAuth.some(pattern => pattern.test(body));
+    };
+
+    const hasTrackingReference = (body: string): boolean => {
+      const patterns = [
+        /pending|queued|operations?|operationId|opId/i,
+        /mapping\s*\(/,
+        /delete\s+\w+/,
+      ];
+      return patterns.some(pattern => pattern.test(body));
+    };
+
+    const isStateChanging = (body: string): boolean => {
+      const stateChangePatterns = [
+        /\b\w+\s*(?:\[[^\]]+\])?\s*(?:=|\+=|-=|\*=|\/=|%=)/,
+        /\.transfer\s*\(/,
+        /\.call\s*\{/,
+        /\.send\s*\(/,
+        /_grantRole\s*\(/,
+        /_revokeRole\s*\(/,
+      ];
+
+      return stateChangePatterns.some(pattern => pattern.test(body));
+    };
+
+    let i = 0;
+    while (i < lines.length) {
+      const match = lines[i].match(functionDecl);
+      if (!match) {
+        i++;
+        continue;
+      }
+
+      const functionName = match[1];
+      const functionSignatureSuffix = match[3] || '';
+      const functionStartLine = i + 1;
+
+      let braceDepth = 0;
+      let started = false;
+      const bodyLines: string[] = [];
+      let endIndex = i;
+
+      for (let j = i; j < lines.length; j++) {
+        const line = lines[j];
+        const openBraces = (line.match(/\{/g) || []).length;
+        const closeBraces = (line.match(/\}/g) || []).length;
+
+        if (openBraces > 0) {
+          started = true;
+        }
+
+        if (started) {
+          bodyLines.push(line);
+        }
+
+        braceDepth += openBraces;
+        braceDepth -= closeBraces;
+
+        if (started && braceDepth === 0) {
+          endIndex = j;
+          break;
+        }
+      }
+
+      const functionBody = bodyLines.join('\n');
+      const isViewOrPure = /\b(view|pure)\b/.test(functionSignatureSuffix);
+      const isSensitive = sensitiveNamePattern.test(functionName);
+      const isScheduler = schedulerNamePattern.test(functionName);
+      const isExecutor = executeNamePattern.test(functionName);
+      const isCanceller = cancelNamePattern.test(functionName);
+      const hasAuth = hasAuthorization(functionSignatureSuffix, functionBody);
+
+      // Scheduling / execution / cancellation operations should be role restricted.
+      if ((isScheduler || isExecutor || isCanceller) && !hasAuth) {
+        findings.push({
+          startLine: functionStartLine,
+          endLine: functionStartLine,
+          message: `Timelock operation '${functionName}' lacks authorization checks`,
+        });
+      }
+
+      // Execution operations must enforce delay.
+      if (isExecutor && !hasDelayEnforcement(functionBody)) {
+        findings.push({
+          startLine: functionStartLine,
+          endLine: functionStartLine,
+          message: `Execution function '${functionName}' does not enforce timelock delay`,
+        });
+      }
+
+      // Sensitive state-changing operations should not execute immediately.
+      if (isSensitive && !isScheduler && !isExecutor && !isCanceller && !isViewOrPure) {
+        const stateChanging = isStateChanging(functionBody);
+        if (stateChanging) {
+          const hasDelay = hasDelayEnforcement(functionBody);
+          const hasTracking = hasTrackingReference(functionBody) || contractHasTracking;
+          const contractHasTimelockFlow = contractHasSchedule && contractHasExecute;
+
+          if (!hasDelay || !hasTracking || !contractHasTimelockFlow) {
+            findings.push({
+              startLine: functionStartLine,
+              endLine: functionStartLine,
+              message: `Sensitive operation '${functionName}' lacks enforced timelock scheduling/delay`,
+            });
+          }
+        }
+      }
+
+      i = endIndex + 1;
+    }
+
+    // Timelock systems should expose cancellation and event telemetry.
+    if (contractHasSchedule && contractHasExecute && !contractHasCancel) {
+      findings.push({
+        startLine: 1,
+        endLine: 1,
+        message: 'Timelock flow is missing cancellation capability for queued operations',
+      });
+    }
+
+    if ((contractHasSchedule || contractHasExecute || contractHasCancel) && !hasTimelockEvents) {
+      findings.push({
+        startLine: 1,
+        endLine: 1,
+        message: 'Timelock operations should emit schedule/execute/cancel events for transparency',
+      });
     }
 
     return findings;
