@@ -484,4 +484,97 @@ describe('Solidity Reentrancy Guard Analysis', () => {
       expect(ceiIssues).toHaveLength(0);
     });
   });
+
+  describe('Contract Health Check Functionality', () => {
+    it('should recognize health check functions as safe monitoring utilities', async () => {
+      const healthCheckContract = fs.readFileSync(
+        path.join(__dirname, '../../examples/health_checkable_bank.sol'),
+        'utf8'
+      );
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: healthCheckContract,
+      });
+
+      // Health check functions should not trigger security warnings
+      const criticalIssues = result.issues.filter(issue => issue.severity === 'critical');
+      const highIssues = result.issues.filter(issue => issue.severity === 'high');
+
+      // Should have minimal or no security issues for health check functions
+      // (may have some informational issues about gas optimization)
+      expect(criticalIssues.length).toBeLessThanOrEqual(1); // Allow 1 for potential gas issues
+      expect(highIssues).toHaveLength(0);
+    });
+
+    it('should validate health check function structure', async () => {
+      const healthCheckSource = `
+        contract HealthCheckable {
+            uint256 public totalBalances;
+            bool private locked;
+
+            function healthCheck() external view returns (
+                uint256 balance,
+                uint256 total,
+                bool invariant,
+                bool isLocked,
+                uint256 timestamp,
+                uint256 version
+            ) {
+                balance = address(this).balance;
+                total = totalBalances;
+                invariant = balance == total;
+                isLocked = locked;
+                timestamp = block.timestamp;
+                version = 1;
+            }
+
+            function checkCriticalInvariants() external view returns (bool) {
+                return address(this).balance >= totalBalances;
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: healthCheckSource,
+      });
+
+      // Health check functions should be clean of security issues
+      const securityIssues = result.issues.filter(
+        issue => ['critical', 'high'].includes(issue.severity) &&
+        !issue.message.includes('gas') // Allow gas optimization suggestions
+      );
+      expect(securityIssues).toHaveLength(0);
+    });
+
+    it('should detect potentially unsafe health check implementations', async () => {
+      const unsafeHealthCheck = `
+        contract UnsafeHealthCheck {
+            address public owner;
+
+            function riskyHealthCheck() external returns (bool) {
+                // UNSAFE: Modifies state in health check
+                owner = msg.sender;
+                return true;
+            }
+
+            function expensiveHealthCheck() external view {
+                // UNSAFE: Potentially unbounded loop
+                for (uint256 i = 0; i < 1000000; i++) {
+                    // Expensive operation
+                }
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: unsafeHealthCheck,
+      });
+
+      // Should detect issues with unsafe health check implementations
+      expect(result.issues.length).toBeGreaterThan(0);
+    });
+  });
 });

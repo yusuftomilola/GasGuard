@@ -22,6 +22,8 @@ pub struct OptimizedContract {
     pub balance: u64,
     pub transaction_count: u32,
     pub version: u32,                // ✅ Version tracking (#123)
+    pub last_health_check: u64,      // Timestamp of last health check
+    pub total_operations: u32,       // Total operations performed
 }
 
 #[contractimpl]
@@ -107,6 +109,8 @@ impl OptimizedContract {
             balance: initial_balance,
             transaction_count: 0,
             version: 1, // Initialize version
+            last_health_check: 0,
+            total_operations: 0,
         })
     }
     
@@ -132,6 +136,7 @@ impl OptimizedContract {
         let current_balance = self.balance;
         self.balance = current_balance - amount;
         self.transaction_count += 1;
+        self.total_operations += 1;
         
         Ok(())
     }
@@ -157,18 +162,88 @@ impl OptimizedContract {
 
     /// Version tracking - Issue #123
     pub fn version(&self) -> u32 {
-        1 // v1
+        self.version
+    }
+
+    /// Comprehensive health check for monitoring and diagnostics
+    pub fn perform_health_check(&mut self, env: Env) -> Result<HealthStatus, DemoError> {
+        let current_timestamp = env.ledger().timestamp();
+        self.last_health_check = current_timestamp;
+
+        // Perform various health checks
+        let balance_positive = self.balance > 0;
+        let operations_consistent = self.total_operations >= self.transaction_count as u32;
+        let version_valid = self.version > 0;
+
+        // Check for any anomalies
+        let has_anomalies = !balance_positive || !operations_consistent || !version_valid;
+
+        Ok(HealthStatus {
+            contract_balance: self.balance,
+            transaction_count: self.transaction_count,
+            total_operations: self.total_operations,
+            contract_version: self.version,
+            last_check_timestamp: current_timestamp,
+            balance_positive,
+            operations_consistent,
+            version_valid,
+            has_anomalies,
+            ledger_sequence: env.ledger().sequence(),
+        })
+    }
+
+    /// View-only health check (no state changes)
+    pub fn get_health_status(&self, env: Env) -> HealthStatus {
+        let balance_positive = self.balance > 0;
+        let operations_consistent = self.total_operations >= self.transaction_count as u32;
+        let version_valid = self.version > 0;
+        let has_anomalies = !balance_positive || !operations_consistent || !version_valid;
+
+        HealthStatus {
+            contract_balance: self.balance,
+            transaction_count: self.transaction_count,
+            total_operations: self.total_operations,
+            contract_version: self.version,
+            last_check_timestamp: self.last_health_check,
+            balance_positive,
+            operations_consistent,
+            version_valid,
+            has_anomalies,
+            ledger_sequence: env.ledger().sequence(),
+        }
+    }
+
+    /// Quick health check for monitoring tools
+    pub fn quick_health_check(&self) -> (bool, u64, u32) {
+        let is_healthy = self.balance > 0 && self.version > 0;
+        (is_healthy, self.balance, self.version)
+    }
+
+    /// Check critical invariants
+    pub fn check_invariants(&self) -> bool {
+        // Critical invariants that must always hold
+        let balance_non_negative = self.balance >= 0;
+        let operations_non_decreasing = self.total_operations >= self.transaction_count as u32;
+        let version_set = self.version > 0;
+
+        balance_non_negative && operations_non_decreasing && version_set
     }
 }
+}
 
-/// Error type for the contract
+/// Health status structure for comprehensive monitoring
 #[contracttype]
-#[derive(Debug, Clone)]
-pub enum DemoError {
-    InvalidAmount,
-    InsufficientBalance,
-    Unauthorized,
-    TransactionExpired,
+pub struct HealthStatus {
+    pub contract_balance: u64,
+    pub transaction_count: u32,
+    pub total_operations: u32,
+    pub contract_version: u32,
+    pub last_check_timestamp: u64,
+    pub balance_positive: bool,
+    pub operations_consistent: bool,
+    pub version_valid: bool,
+    pub has_anomalies: bool,
+    pub ledger_sequence: u32,
 }
 
 #[cfg(test)]
