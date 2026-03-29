@@ -6,6 +6,7 @@ import { RecordTransactionDto } from "./dto/record-transaction.entity";
 import { AlertQueryDto, Granularity, MetricsQueryDto, TimeSeriesQueryDto } from "./metrics-query.dto";
 import { RateLimitService, RateLimitStatus } from "./rate-limit.service";
 import { SuspiciousActivityService, SuspiciousActivityAlert } from "./suspicious-activity.service";
+import { AuditLogService } from "../audit";
 
 function parsePeriod(period: string): { start: Date; end: Date } {
   const parts = period.split("-").map(Number);
@@ -66,6 +67,7 @@ export class TransactionsService {
     private readonly txRepo: Repository<Transaction>,
     private readonly rateLimitService: RateLimitService,
     private readonly suspiciousActivityService: SuspiciousActivityService,
+    private readonly auditLogService: AuditLogService,
   ) {}
 
   async record(dto: RecordTransactionDto): Promise<RecordTransactionResult> {
@@ -83,6 +85,21 @@ export class TransactionsService {
 
     // Analyze for suspicious patterns
     const suspiciousActivity = this.suspiciousActivityService.analyze(saved);
+
+    // Emit audit log event
+    this.auditLogService.emitGasTransaction(
+      dto.merchantId,
+      dto.chainId,
+      dto.txHash,
+      Number(dto.gasUsed),
+      dto.gasPrice || "0",
+      dto.from || "unknown",
+      {
+        transactionId: saved.id,
+        status: saved.status,
+        type: saved.type,
+      },
+    );
 
     return { transaction: saved, rateLimit, suspiciousActivity };
   }
@@ -210,7 +227,7 @@ export class TransactionsService {
       .createQueryBuilder("tx")
       .select("DISTINCT tx.chainId", "chainId")
       .where("tx.merchantId = :merchantId", { merchantId })
-      .getRawMany<{ chainId: number }>();
+      .getRawMany();
 
     return Promise.all(
       rows.map(({ chainId }) =>
