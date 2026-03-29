@@ -691,6 +691,15 @@ export class FeeConfigurationService {
       );
     }
 
+    if (
+      updatedSettings.timelockDelayMinutes !== undefined &&
+      updatedSettings.timelockDelayMinutes < 0
+    ) {
+      throw new BadRequestException(
+        "Timelock delay must be zero or a positive number of minutes.",
+      );
+    }
+
     this.adminSettings = updatedSettings;
 
     this.logger.log(`Admin settings updated by ${adminUserId}`);
@@ -1048,6 +1057,7 @@ export class FeeConfigurationService {
       approvalRequiredUsers: [],
       multisigSigners: [],
       multisigApprovalThreshold: 2,
+      timelockDelayMinutes: 60,
       defaultGracePeriod: 7, // 7 days
       enableUserNotifications: true,
       notificationChannels: ["email", "in-app"],
