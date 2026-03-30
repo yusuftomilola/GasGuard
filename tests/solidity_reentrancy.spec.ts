@@ -484,4 +484,229 @@ describe('Solidity Reentrancy Guard Analysis', () => {
       expect(ceiIssues).toHaveLength(0);
     });
   });
+  describe('Enhanced Circuit Breaker Functionality', () => {
+    it('should validate circuit breaker pause/unpause operations', async () => {
+      const circuitBreakerSource = `
+        contract EnhancedCircuitBreaker {
+            mapping(bytes32 => bool) private pausedModules;
+            bool private globalPause;
+            address public admin;
+            address public emergencyPauser;
+
+            bytes32 public constant WITHDRAWAL_MODULE = keccak256("WITHDRAWAL");
+            bytes32 public constant DEPOSIT_MODULE = keccak256("DEPOSIT");
+
+            event ModulePaused(bytes32 indexed moduleId, address indexed pauser, uint256 timestamp);
+            event ModuleUnpaused(bytes32 indexed moduleId, address indexed unpauser, uint256 timestamp);
+
+            modifier onlyEmergencyPauser() {
+                require(msg.sender == emergencyPauser || msg.sender == admin, "Not authorized");
+                _;
+            }
+
+            modifier onlyAdmin() {
+                require(msg.sender == admin, "Not admin");
+                _;
+            }
+
+            constructor(address _admin, address _emergencyPauser) {
+                admin = _admin;
+                emergencyPauser = _emergencyPauser;
+            }
+
+            function pauseModule(bytes32 moduleId) external onlyEmergencyPauser {
+                require(!pausedModules[moduleId], "Already paused");
+                pausedModules[moduleId] = true;
+                emit ModulePaused(moduleId, msg.sender, block.timestamp);
+            }
+
+            function adminUnpause(bytes32 moduleId) external onlyAdmin {
+                require(pausedModules[moduleId], "Not paused");
+                pausedModules[moduleId] = false;
+                emit ModuleUnpaused(moduleId, msg.sender, block.timestamp);
+            }
+
+            function isPaused(bytes32 moduleId) public view returns (bool) {
+                return globalPause || pausedModules[moduleId];
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: circuitBreakerSource,
+      });
+
+      // Circuit breaker should not trigger security issues
+      const criticalIssues = result.issues.filter(issue => issue.severity === 'critical');
+      const highIssues = result.issues.filter(issue => issue.severity === 'high');
+
+      expect(criticalIssues).toHaveLength(0);
+      expect(highIssues).toHaveLength(0);
+    });
+
+    it('should detect unsafe circuit breaker implementations', async () => {
+      const unsafeCircuitBreaker = `
+        contract UnsafeCircuitBreaker {
+            bool public paused;
+
+            function pause() external {
+                // UNSAFE: Anyone can pause
+                paused = true;
+            }
+
+            function unpause() external {
+                // UNSAFE: Anyone can unpause immediately
+                paused = false;
+            }
+
+            function sensitiveOperation() external {
+                require(!paused, "Paused");
+                // Critical operation
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: unsafeCircuitBreaker,
+      });
+
+      // Should detect missing access controls
+      expect(result.issues.length).toBeGreaterThan(0);
+    });
+
+    it('should validate protected contract integration', async () => {
+      const protectedContractSource = `
+        import "./enhanced_circuit_breaker.sol";
+
+        contract ProtectedBank is EnhancedCircuitBreaker {
+            mapping(address => uint256) public balances;
+
+            modifier onlyWhenNotPaused(bytes32 moduleId) {
+                require(!isPaused(moduleId), "Module paused");
+                _;
+            }
+
+            bytes32 public constant WITHDRAWAL_MODULE = keccak256("WITHDRAWAL");
+
+            function withdraw(uint256 amount) external onlyWhenNotPaused(WITHDRAWAL_MODULE) {
+                require(balances[msg.sender] >= amount, "Insufficient balance");
+                balances[msg.sender] -= amount;
+                payable(msg.sender).transfer(amount);
+            }
+
+            function emergencyWithdraw(uint256 amount) external {
+                // Emergency withdrawal that works even when paused
+                require(isPaused(WITHDRAWAL_MODULE) || globalPause, "Not in emergency");
+                uint256 maxAmount = balances[msg.sender] / 2;
+                require(amount <= maxAmount, "Amount too high for emergency");
+                balances[msg.sender] -= amount;
+                payable(msg.sender).transfer(amount);
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: protectedContractSource,
+      });
+
+      // Protected contract should have minimal security issues
+      const criticalIssues = result.issues.filter(issue => issue.severity === 'critical');
+      expect(criticalIssues).toHaveLength(0);
+    });
+  });
+  describe('Contract Health Check Functionality', () => {
+    it('should recognize health check functions as safe monitoring utilities', async () => {
+      const healthCheckContract = fs.readFileSync(
+        path.join(__dirname, '../../examples/health_checkable_bank.sol'),
+        'utf8'
+      );
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: healthCheckContract,
+      });
+
+      // Health check functions should not trigger security warnings
+      const criticalIssues = result.issues.filter(issue => issue.severity === 'critical');
+      const highIssues = result.issues.filter(issue => issue.severity === 'high');
+
+      // Should have minimal or no security issues for health check functions
+      // (may have some informational issues about gas optimization)
+      expect(criticalIssues.length).toBeLessThanOrEqual(1); // Allow 1 for potential gas issues
+      expect(highIssues).toHaveLength(0);
+    });
+
+    it('should validate health check function structure', async () => {
+      const healthCheckSource = `
+        contract HealthCheckable {
+            uint256 public totalBalances;
+            bool private locked;
+
+            function healthCheck() external view returns (
+                uint256 balance,
+                uint256 total,
+                bool invariant,
+                bool isLocked,
+                uint256 timestamp,
+                uint256 version
+            ) {
+                balance = address(this).balance;
+                total = totalBalances;
+                invariant = balance == total;
+                isLocked = locked;
+                timestamp = block.timestamp;
+                version = 1;
+            }
+
+            function checkCriticalInvariants() external view returns (bool) {
+                return address(this).balance >= totalBalances;
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: healthCheckSource,
+      });
+
+      // Health check functions should be clean of security issues
+      const securityIssues = result.issues.filter(
+        issue => ['critical', 'high'].includes(issue.severity) &&
+        !issue.message.includes('gas') // Allow gas optimization suggestions
+      );
+      expect(securityIssues).toHaveLength(0);
+    });
+
+    it('should detect potentially unsafe health check implementations', async () => {
+      const unsafeHealthCheck = `
+        contract UnsafeHealthCheck {
+            address public owner;
+
+            function riskyHealthCheck() external returns (bool) {
+                // UNSAFE: Modifies state in health check
+                owner = msg.sender;
+                return true;
+            }
+
+            function expensiveHealthCheck() external view {
+                // UNSAFE: Potentially unbounded loop
+                for (uint256 i = 0; i < 1000000; i++) {
+                    // Expensive operation
+                }
+            }
+        }
+      `;
+
+      const result = await engine.scan({
+        language: 'solidity',
+        source: unsafeHealthCheck,
+      });
+
+      // Should detect issues with unsafe health check implementations
+      expect(result.issues.length).toBeGreaterThan(0);
+    });
+  });
 });
